@@ -9,10 +9,15 @@ API_HASH = os.getenv("TELEGRAM_API_HASH")
 SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME", "prayer_session")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "imonuz")
 
-# Storage
-DATA_DIR = os.getenv("DATA_DIR", "data/imonuz")
-STABLE_PATH = os.getenv("DOWNLOAD_PATH", "prayer_times.jpg")  # stable copy/symlink to today's image
-USE_SYMLINK = os.getenv("USE_SYMLINK", "false").lower() == "true"
+# ---------- Storage ----------
+DATA_DIR = os.path.abspath(os.getenv("DATA_DIR", "data/imonuz"))
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Keep a stable “today” pointer/file INSIDE the data dir by default
+_default_stable = os.path.join(DATA_DIR, "prayer_times.jpg")
+STABLE_PATH = os.path.abspath(os.getenv("DOWNLOAD_PATH", _default_stable))
+
+USE_SYMLINK = os.getenv("USE_SYMLINK", "false").lower() == "true"   # keep false on Railway
 RETAIN_DAYS = int(os.getenv("RETAIN_DAYS", "14"))
 
 # Asia/Tashkent = UTC+5 (no DST)
@@ -42,20 +47,20 @@ def _stable_points_to(path: str) -> bool:
         return False
 
 def _point_stable_to(src: str):
-    """Update STABLE_PATH to point to src (copy or symlink)."""
+    src = os.path.abspath(src)
+    dst = os.path.abspath(STABLE_PATH)
     if USE_SYMLINK:
         try:
-            if os.path.islink(STABLE_PATH) or os.path.exists(STABLE_PATH):
-                os.remove(STABLE_PATH)
+            if os.path.islink(dst) or os.path.exists(dst):
+                os.remove(dst)
         except FileNotFoundError:
             pass
-        os.symlink(src, STABLE_PATH)
-        print(f"🔗 Linked {STABLE_PATH} -> {src}")
+        os.symlink(src, dst)
+        print(f"🔗 Linked {dst} -> {src}")
     else:
-        # copy bytes (keeps things simple on hosts that dislike symlinks)
-        with open(src, "rb") as fsrc, open(STABLE_PATH, "wb") as fdst:
+        with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
             fdst.write(fsrc.read())
-        print(f"📎 Copied {src} -> {STABLE_PATH}")
+        print(f"📎 Copied {src} -> {dst}")
 
 def _cleanup_old_files():
     if RETAIN_DAYS <= 0:
@@ -75,6 +80,24 @@ def _cleanup_old_files():
         except Exception:
             pass
 
+def _list_data_dir() -> None:
+    """Log volume contents so you can verify persistence in Railway Logs."""
+    try:
+        if not os.path.isdir(DATA_DIR):
+            print(f"📂 DATA_DIR does not exist yet: {DATA_DIR}")
+            return
+        print(f"📂 Contents of {DATA_DIR}:")
+        for name in sorted(os.listdir(DATA_DIR)):
+            path = os.path.join(DATA_DIR, name)
+            try:
+                size = os.path.getsize(path)
+                mtime = datetime.fromtimestamp(os.path.getmtime(path), UZ_TZ)
+                print(f"   - {name} ({size} bytes, modified {mtime:%Y-%m-%d %H:%M:%S} UZ)")
+            except Exception as e:
+                print(f"   - {name} (error reading: {e})")
+    except Exception as e:
+        print("⚠️ Could not list DATA_DIR:", e)
+
 def run_daily_check() -> bool:
     """
     Ensure today's image exists as data/imonuz/YYYY-MM-DD.jpg
@@ -84,6 +107,9 @@ def run_daily_check() -> bool:
     print("🔍 Checking messages...")
     today = _today_uz_date()
     today_path = _dated_path_for(today)
+
+    # Log current volume state
+    _list_data_dir()
 
     # If already have today's file, ensure stable pointer is set and return True
     if os.path.exists(today_path):
