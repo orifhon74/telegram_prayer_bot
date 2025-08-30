@@ -2,8 +2,5 @@ telethon==1.36.0
 pillow==10.4.0
 pytesseract==0.3.13
 python-telegram-bot==13.15
-APScheduler==3.10.4
+APScheduler==3.6.3
 pytz==2024.1
-
-# OCR & audio/image deps come with apt packages in the base image.
-# If you later containerize yourself, apt-get install tesseract-ocr.
