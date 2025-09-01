@@ -1,39 +1,43 @@
-# --- daily_checker.py ---
+# === daily_checker.py ===
 import os
 from datetime import datetime, timedelta
-from telethon.sync import TelegramClient
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.tl.types import MessageMediaPhoto
-
 from config import (
     API_ID, API_HASH, CHANNEL_USERNAME,
-    DATA_DIR, STABLE_PATH, USE_SYMLINK, RETAIN_DAYS, UZ_TZ, SESSION_PATH
+    DATA_DIR, SESSION_PATH, TELEGRAM_STRING_SESSION,
+    UZ_TZ, STABLE_PATH, USE_SYMLINK, RETAIN_DAYS,
 )
 
-def _today_uz():
+# --- Helpers ---
+def _ensure_dir(p: str):
+    os.makedirs(p, exist_ok=True)
+
+def _today_uz_date():
     return datetime.now(UZ_TZ).date()
 
-def _ensure_dir(path: str):
-    os.makedirs(path, exist_ok=True)
-
-def _dated_image_path(d) -> str:
+def _dated_path_for(date_obj) -> str:
     _ensure_dir(DATA_DIR)
-    return os.path.join(DATA_DIR, f"{d.isoformat()}.jpg")
+    return os.path.join(DATA_DIR, f"{date_obj.isoformat()}.jpg")
 
-def _stable_points_to(dst: str) -> bool:
+def _stable_points_to(path: str) -> bool:
+    """Return True if STABLE_PATH already points to this path."""
     if not os.path.exists(STABLE_PATH):
         return False
     try:
         if os.path.islink(STABLE_PATH):
-            return os.path.realpath(STABLE_PATH) == os.path.realpath(dst)
+            return os.path.realpath(STABLE_PATH) == os.path.realpath(path)
+        else:
+            return False
     except Exception:
-        pass
-    return False
+        return False
 
 def _point_stable_to(src: str):
-    # symlink or copy
+    """Update STABLE_PATH to point to src (copy or symlink)."""
     if USE_SYMLINK:
         try:
-            if os.path.exists(STABLE_PATH) or os.path.islink(STABLE_PATH):
+            if os.path.islink(STABLE_PATH) or os.path.exists(STABLE_PATH):
                 os.remove(STABLE_PATH)
         except FileNotFoundError:
             pass
@@ -44,7 +48,7 @@ def _point_stable_to(src: str):
             fdst.write(fsrc.read())
         print(f"📎 Copied {src} -> {STABLE_PATH}")
 
-def _cleanup_old():
+def _cleanup_old_files():
     if RETAIN_DAYS <= 0:
         return
     cutoff = datetime.now(UZ_TZ) - timedelta(days=RETAIN_DAYS)
@@ -62,52 +66,63 @@ def _cleanup_old():
         except Exception:
             pass
 
-def fetch_today_image() -> str | None:
-    """
-    Try to ensure today's image exists (00:00–02:00 window preferred).
-    Returns path to today's image or None.
-    """
-    today = _today_uz()
-    today_path = _dated_image_path(today)
+# --- Telethon Client ---
+def _make_client() -> TelegramClient:
+    """Use StringSession if provided, else file-based session under DATA_DIR."""
+    if TELEGRAM_STRING_SESSION:
+        return TelegramClient(StringSession(TELEGRAM_STRING_SESSION), API_ID, API_HASH)
+    else:
+        return TelegramClient(SESSION_PATH, API_ID, API_HASH)
 
-    # Already present? update stable and return
+# --- Main check ---
+def run_daily_check() -> bool:
+    """
+    Ensure today's image exists as data/imonuz/YYYY-MM-DD.jpg
+    and update STABLE_PATH to point to it.
+    Returns True if present (reused or freshly downloaded), else False.
+    """
+    print("🔍 Checking messages...")
+    today = _today_uz_date()
+    today_path = _dated_path_for(today)
+
+    # Already have today's file
     if os.path.exists(today_path):
         if not _stable_points_to(today_path):
             _point_stable_to(today_path)
-        print("🕐 Today's image already present.")
-        _cleanup_old()
-        return today_path
+        print("🕐 Today's image already present. Reusing.")
+        _cleanup_old_files()
+        return True
 
-    # Preferred window
-    start = datetime(today.year, today.month, today.day, 0, 0, tzinfo=UZ_TZ)
-    end = start + timedelta(hours=2)
+    # Window: 00:00–02:00 UZ
+    start_uz = datetime(today.year, today.month, today.day, 0, 0, tzinfo=UZ_TZ)
+    end_uz = start_uz + timedelta(hours=2)
 
     try:
-        with TelegramClient(SESSION_PATH, API_ID, API_HASH) as client:
-            # Search for a photo in the 00:00–02:00 window
-            for msg in client.iter_messages(CHANNEL_USERNAME, limit=60):
+        with _make_client() as client:
+            # Try strict time window first
+            for msg in client.iter_messages(CHANNEL_USERNAME, limit=50):
                 if isinstance(msg.media, MessageMediaPhoto):
                     msg_uz = msg.date.astimezone(UZ_TZ)
-                    if start <= msg_uz <= end:
+                    if start_uz <= msg_uz <= end_uz:
                         client.download_media(msg.media, file=today_path)
-                        print(f"📸 Downloaded in window: {msg_uz} -> {today_path}")
+                        print(f"📸 Downloaded image in window: {msg_uz} -> {today_path}")
                         _point_stable_to(today_path)
-                        _cleanup_old()
-                        return today_path
+                        _cleanup_old_files()
+                        return True
 
             # Fallback: any photo posted today
-            for msg in client.iter_messages(CHANNEL_USERNAME, limit=60):
+            for msg in client.iter_messages(CHANNEL_USERNAME, limit=50):
                 if isinstance(msg.media, MessageMediaPhoto):
                     msg_uz = msg.date.astimezone(UZ_TZ)
                     if msg_uz.date() == today:
                         client.download_media(msg.media, file=today_path)
-                        print(f"📸 Downloaded fallback today: {msg_uz} -> {today_path}")
+                        print(f"📸 Downloaded today's latest image (fallback): {msg_uz} -> {today_path}")
                         _point_stable_to(today_path)
-                        _cleanup_old()
-                        return today_path
+                        _cleanup_old_files()
+                        return True
 
     except Exception as e:
         print("❌ Telethon error:", e)
 
     print("❌ No image found for today.")
-    return None
+    return False
