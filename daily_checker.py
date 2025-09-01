@@ -67,11 +67,23 @@ def _cleanup_old_files():
         except Exception:
             pass
 
-def _make_client() -> TelegramClient:
-    """Prefer StringSession (Railway variable) if present, else file session under DATA_DIR."""
+def _make_client() -> TelegramClient | None:
     if TELEGRAM_STRING_SESSION:
-        return TelegramClient(StringSession(TELEGRAM_STRING_SESSION), API_ID, API_HASH)
-    return TelegramClient(SESSION_PATH, API_ID, API_HASH)
+        client = TelegramClient(StringSession(TELEGRAM_STRING_SESSION), API_ID, API_HASH)
+    else:
+        client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
+
+    client.connect()
+    try:
+        if not client.is_user_authorized():
+            print("❌ Telethon is NOT authorized. Provide TELEGRAM_STRING_SESSION in Railway.")
+            client.disconnect()
+            return None
+    except Exception as e:
+        print("❌ Telethon auth check failed:", e)
+        client.disconnect()
+        return None
+    return client
 
 def _safe_download(client: TelegramClient, msg, out_path: str) -> bool:
     """
@@ -82,7 +94,6 @@ def _safe_download(client: TelegramClient, msg, out_path: str) -> bool:
     """
     try:
         _ensure_dir(os.path.dirname(out_path))
-        # 1st attempt
         client.download_media(msg, file=out_path)
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             return True
@@ -115,8 +126,13 @@ def fetch_today_image() -> str | None:
     start_uz = datetime(today.year, today.month, today.day, 0, 0, tzinfo=UZ_TZ)
     end_uz = start_uz + timedelta(hours=2)
 
+    client = _make_client()
+    if client is None:
+        print("❌ Cannot proceed without an authorized session.")
+        return None
+
     try:
-        with _make_client() as client:
+        with client:
             # 1) strict window first
             for msg in client.iter_messages(CHANNEL_USERNAME, limit=50):
                 if isinstance(msg.media, MessageMediaPhoto):
@@ -130,7 +146,7 @@ def fetch_today_image() -> str | None:
                         else:
                             print("❌ Download returned no file (window).")
 
-            # 2) fallback: any photo from today (sometimes they post a bit off 00:10)
+            # 2) fallback: any photo from today
             for msg in client.iter_messages(CHANNEL_USERNAME, limit=50):
                 if isinstance(msg.media, MessageMediaPhoto):
                     msg_uz = msg.date.astimezone(UZ_TZ)
@@ -142,7 +158,6 @@ def fetch_today_image() -> str | None:
                             return today_path
                         else:
                             print("❌ Download returned no file (fallback).")
-
     except Exception as e:
         print("❌ Telethon error:", e)
 
