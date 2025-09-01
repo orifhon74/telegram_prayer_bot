@@ -1,7 +1,9 @@
 # === daily_checker.py ===
 import os
 from datetime import datetime, timedelta
-from telethon import TelegramClient
+
+# IMPORTANT: use the sync wrapper so methods are not coroutines
+from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.types import MessageMediaPhoto
 
@@ -68,38 +70,55 @@ def _cleanup_old_files():
             pass
 
 def _make_client() -> TelegramClient | None:
-    if TELEGRAM_STRING_SESSION:
-        client = TelegramClient(StringSession(TELEGRAM_STRING_SESSION), API_ID, API_HASH)
-    else:
-        client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
-
-    client.connect()
+    """Create a sync client and ensure it is authorized."""
     try:
+        if TELEGRAM_STRING_SESSION:
+            client = TelegramClient(StringSession(TELEGRAM_STRING_SESSION), API_ID, API_HASH)
+        else:
+            client = TelegramClient(SESSION_PATH, API_ID, API_HASH)
+
+        client.connect()
         if not client.is_user_authorized():
-            print("❌ Telethon is NOT authorized. Provide TELEGRAM_STRING_SESSION in Railway.")
+            print("❌ Telethon is NOT authorized. Set TELEGRAM_STRING_SESSION and ensure the account joined the channel.")
             client.disconnect()
             return None
+        return client
     except Exception as e:
-        print("❌ Telethon auth check failed:", e)
-        client.disconnect()
+        print("❌ Telethon connect/auth error:", e)
+        try:
+            client.disconnect()
+        except Exception:
+            pass
         return None
-    return client
 
 def _safe_download(client: TelegramClient, msg, out_path: str) -> bool:
     """
     Robust download:
-      1) pass the *message* (not msg.media)
+      1) pass the message (not msg.media)
       2) verify existence
       3) retry once
+      4) fallback: refetch by id then try again
     """
     try:
         _ensure_dir(os.path.dirname(out_path))
+
+        # 1st attempt
         client.download_media(msg, file=out_path)
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             return True
+
         # Retry once
         client.download_media(msg, file=out_path)
-        return os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return True
+
+        # Fallback: fetch the full message by id and try again
+        full = client.get_messages(CHANNEL_USERNAME, ids=msg.id)
+        if full:
+            client.download_media(full, file=out_path)
+            return os.path.exists(out_path) and os.path.getsize(out_path) > 0
+
+        return False
     except Exception as e:
         print("⚠️ download_media error:", e)
         return False
@@ -124,14 +143,14 @@ def fetch_today_image() -> str | None:
 
     # Time window: 00:00–02:00 (UZT)
     start_uz = datetime(today.year, today.month, today.day, 0, 0, tzinfo=UZ_TZ)
-    end_uz = start_uz + timedelta(hours=2)
-
-    client = _make_client()
-    if client is None:
-        print("❌ Cannot proceed without an authorized session.")
-        return None
+    end_uz   = start_uz + timedelta(hours=2)
 
     try:
+        client = _make_client()
+        if client is None:
+            print("❌ No authorized Telegram client.")
+            return None
+
         with client:
             # 1) strict window first
             for msg in client.iter_messages(CHANNEL_USERNAME, limit=50):
@@ -158,6 +177,7 @@ def fetch_today_image() -> str | None:
                             return today_path
                         else:
                             print("❌ Download returned no file (fallback).")
+
     except Exception as e:
         print("❌ Telethon error:", e)
 
