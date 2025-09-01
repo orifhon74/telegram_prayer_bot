@@ -1,52 +1,60 @@
-# === app.py ===
+# --- app.py ---
 import os
-import time
-from apscheduler.schedulers.background import BackgroundScheduler
-from pytz import timezone as tz_get
-from daily_checker import run_daily_check
-from bot_scheduler import schedule_notifications
+from flask import Flask, jsonify
+from apscheduler.triggers.cron import CronTrigger
 
-TZ_NAME = os.getenv("TZ_NAME", "Asia/Tashkent")
-UZ_TZ = tz_get(TZ_NAME)
+from config import UZ_TZ, FETCH_CRON_HOUR, FETCH_CRON_MIN, DATA_DIR, STABLE_PATH
+from notifier import scheduler, schedule_from_image
+from daily_checker import fetch_today_image
 
-def refresh_and_schedule(scheduler: BackgroundScheduler):
+app = Flask(__name__)
+
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
+
+@app.route("/status")
+def status():
+    return jsonify({
+        "data_dir": DATA_DIR,
+        "stable_path_exists": os.path.exists(STABLE_PATH),
+        "jobs": [repr(j) for j in scheduler.get_jobs()],
+    })
+
+def bootstrap_once():
     """
-    Download/reuse today's image, then (re)schedule today's notifications.
+    On startup: ensure today's image and build today's schedule.
     """
-    ok = run_daily_check()
-    if ok:
-        # brief pause to ensure file flushed
-        time.sleep(1)
-        schedule_notifications(scheduler)
+    print(f"🚀 Starting prayer bot service… DATA_DIR={DATA_DIR}")
+    path = fetch_today_image()
+    if path:
+        schedule_from_image(path)
     else:
-        print("🛑 Skipping schedule — no image for today.")
+        print("🟡 No image at startup; will retry at the daily cron.")
 
-def main():
-    print("🚀 Starting prayer bot worker...")
-    scheduler = BackgroundScheduler(timezone=UZ_TZ)
+def schedule_daily_fetch():
+    """
+    Every day @ 00:12 Asia/Tashkent: re-fetch image and rebuild schedule.
+    """
+    def job():
+        print("🔁 Daily fetch job firing…")
+        path = fetch_today_image()
+        if path:
+            schedule_from_image(path)
 
-    # 1) Run immediately at boot
-    refresh_and_schedule(scheduler)
+    trigger = CronTrigger(hour=FETCH_CRON_HOUR, minute=FETCH_CRON_MIN, timezone=UZ_TZ)
+    scheduler.add_job(job, trigger=trigger, name="daily-fetch")
+    print(f"🗓️ Cron set for {FETCH_CRON_HOUR:02d}:{FETCH_CRON_MIN:02d} Asia/Tashkent")
 
-    # 2) Re-run every day shortly after the channel posts (around 00:10 UZ)
-    scheduler.add_job(
-        lambda: refresh_and_schedule(scheduler),
-        trigger='cron',
-        hour=0,
-        minute=12,
-        id="daily_refresh",
-        timezone=UZ_TZ
-    )
+def create_app():
+    if not scheduler.running:
+        scheduler.start(paused=False)
+        schedule_daily_fetch()
+        bootstrap_once()
+    return app
 
-    scheduler.start()
-    print("📆 Scheduler started. Worker is running.")
-
-    try:
-        # Keep the worker alive
-        while True:
-            time.sleep(10)
-    except KeyboardInterrupt:
-        scheduler.shutdown()
-
+# For local runs: python app.py
 if __name__ == "__main__":
-    main()
+    create_app()
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port)

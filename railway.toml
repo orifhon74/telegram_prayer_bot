@@ -1,10 +1,7 @@
-[build]
-builder = "DOCKERFILE"
-
+# --- railway.toml ---
 [deploy]
 restartPolicyType = "ON_FAILURE"
 
-# Attach a persistent volume
 [[volumes]]
 name = "data"
 mountPath = "/data"

@@ -1,23 +1,20 @@
-# Use a lightweight Python base
+# --- Dockerfile ---
 FROM python:3.11-slim
 
-# Install system deps for Tesseract + fonts + ffmpeg
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    tesseract-ocr-rus \
-    tesseract-ocr-uzb \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+# System deps for Tesseract OCR
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr libtesseract-dev \
+ && rm -rf /var/lib/apt/lists/*
 
-# Set workdir
 WORKDIR /app
 
-# Copy dependencies
+# Install Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy code
+# Copy app
 COPY . .
 
-# Default command
-CMD ["python", "app.py"]
+# By default run with gunicorn (Flask app)
+# Railway will inject PORT
+CMD exec gunicorn -w 1 -b 0.0.0.0:${PORT:-5000} app:create_app
