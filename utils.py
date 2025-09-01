@@ -1,4 +1,5 @@
 # --- utils.py ---
+import os
 import re
 import difflib
 from PIL import Image
@@ -9,10 +10,29 @@ TESS_BIN = None  # let pytesseract auto-detect (Docker installs it system-wide)
 if TESS_BIN:
     pytesseract.pytesseract.tesseract_cmd = TESS_BIN
 
+# On Railway the executable will be on PATH; locally you might override it.
+# If you set TESSERACT_CMD in Railway Variables, this respects it.
+pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_CMD", "tesseract")
+
 def extract_text_from_image(image_path: str) -> str:
+    """
+    OCR with preferred langs (uzb+rus), falling back to rus, then eng
+    if the traineddata isn't present. This prevents hard crashes.
+    """
     img = Image.open(image_path)
-    # Uzbek + Russian often appear. Keep as you had.
-    return pytesseract.image_to_string(img, lang="uzb+rus")
+    preferred = ["uzb+rus", "rus", "eng"]
+    last_err = None
+    for lang in preferred:
+        try:
+            return pytesseract.image_to_string(img, lang=lang)
+        except Exception as e:
+            last_err = e
+    # As a last resort, try default (no lang)
+    try:
+        return pytesseract.image_to_string(img)
+    except Exception:
+        # Surface the original, more useful error
+        raise RuntimeError(f"OCR failed; last error: {last_err}") from last_err
 
 def extract_prayer_times(text: str) -> dict:
     """

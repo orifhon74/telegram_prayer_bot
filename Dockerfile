@@ -1,20 +1,28 @@
-# --- Dockerfile ---
+# ---- Dockerfile ----
 FROM python:3.11-slim
 
-# System deps for Tesseract OCR
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    tesseract-ocr libtesseract-dev \
+# System deps (tesseract + languages + tzdata for cron timezones)
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-rus \
+    tesseract-ocr-uzb \
+    tzdata \
  && rm -rf /var/lib/apt/lists/*
 
+# Let pytesseract find traineddata
+ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
+
+# Workdir
 WORKDIR /app
 
-# Install Python deps
+# Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app
+# App code
 COPY . .
 
-# By default run with gunicorn (Flask app)
-# Railway will inject PORT
-CMD exec gunicorn -w 1 -b 0.0.0.0:${PORT:-5000} app:create_app
+# Gunicorn entry (HTTP health port)
+ENV PORT=8080
+CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:8080", "app:create_app()"]
