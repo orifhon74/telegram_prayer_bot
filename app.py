@@ -7,6 +7,10 @@ from config import UZ_TZ, FETCH_CRON_HOUR, FETCH_CRON_MIN, DATA_DIR, STABLE_PATH
 from notifier import scheduler, schedule_from_image
 from daily_checker import fetch_today_image
 
+from telegram.ext import Updater
+from config import BOT_TOKEN
+from commands import register_handlers
+
 app = Flask(__name__)
 
 @app.route("/healthz")
@@ -53,8 +57,15 @@ def create_app():
         bootstrap_once()
     return app
 
+def start_bot():
+    updater = Updater(token=BOT_TOKEN, use_context=True)
+    register_handlers(updater.dispatcher)
+    updater.start_polling()
+    print("🤖 Telegram bot polling started.")
+
 # For local runs: python app.py
 if __name__ == "__main__":
     create_app()
+    start_bot()
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port)
