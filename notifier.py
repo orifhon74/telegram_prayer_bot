@@ -15,6 +15,10 @@ ORDER = ["ТОНГ", "ҚУЁШ", "ПЕШИН", "АСр", "АСР", "ШОМ", "Х
 
 def _send(name_cyr: str):
     eng = PRAYER_NAME_MAP.get(name_cyr, name_cyr)
+    if eng == 'Sunrise':
+        # Skip sending messages for Sunrise
+        print(f"ℹ️ Skipping notification for {eng}.")
+        return
     msg = f"🕌 It's time for {eng} prayer!"
     bot.send_message(chat_id=CHAT_ID, text=msg)
     print(f"✅ Sent: {msg} @ {datetime.now(UZ_TZ).strftime('%H:%M:%S')}")
